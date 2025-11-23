@@ -3,6 +3,10 @@ import {
   SlashCommandBuilder,
   EmbedBuilder,
   GuildMember,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  ComponentType,
   MessageFlags,
 } from "discord.js";
 import { LinkLogger } from "../utils/linkLogger.js";
@@ -69,39 +73,45 @@ export async function execute(
         {
           name: "📜 CONFIRMATION REQUIRED",
           value:
-            "React with 🖋️ within 1 minute to proceed with the severance ritual.",
+            "Click the button below within 60 seconds to proceed with the severance ritual.",
           inline: false,
         },
       )
-      .setFooter({ text: "This confirmation will expire in 60 seconds" })
+      .setFooter({ text: "This confirmation expires in 60 seconds" })
       .setTimestamp();
 
-    const confirmationMessage = await interaction.reply({
+    const confirmButton = new ButtonBuilder()
+      .setCustomId("confirm_severance")
+      .setLabel("Sever the Link")
+      .setEmoji("♠️")
+      .setStyle(ButtonStyle.Danger);
+
+    const cancelButton = new ButtonBuilder()
+      .setCustomId("cancel_severance")
+      .setLabel("Cancel")
+      .setEmoji("❌")
+      .setStyle(ButtonStyle.Secondary);
+
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      cancelButton,
+      confirmButton,
+    );
+
+    const response = await interaction.reply({
       embeds: [confirmationEmbed],
+      components: [row],
       flags: MessageFlags.Ephemeral,
     });
 
-    const message = await confirmationMessage.fetch();
-
     try {
-      await message.react("🖋️");
-    } catch (error) {
-      console.error("Failed to add reaction:", error);
-    }
-
-    const filter = (reaction: any, user: any) => {
-      return reaction.emoji.name === "🖋️" && user.id === interaction.user.id;
-    };
-
-    try {
-      const collected = await message.awaitReactions({
-        filter,
-        max: 1,
+      const confirmation = await response.awaitMessageComponent({
+        filter: (i) => i.user.id === interaction.user.id,
+        componentType: ComponentType.Button,
         time: 60000,
-        errors: ["time"],
       });
 
-      if (collected.size > 0) {
+      if (confirmation.customId === "confirm_severance") {
+        await confirmation.deferUpdate();
         await LinkLogger.removeLink(targetUser.id);
 
         if (targetMember) {
@@ -111,14 +121,11 @@ export async function execute(
             TOP_CONTRIBUTORS_ROLE_ID,
             ...FANDOM_ROLE_IDS,
             ...EDIT_COUNT_ROLE_IDS,
-          ];
-          const rolesToRemoveFiltered = rolesToRemove.filter((roleId) =>
-            targetMember.roles.cache.has(roleId),
-          );
+          ].filter((roleId) => targetMember.roles.cache.has(roleId));
 
-          if (rolesToRemoveFiltered.length > 0) {
+          if (rolesToRemove.length > 0) {
             try {
-              await targetMember.roles.remove(rolesToRemoveFiltered);
+              await targetMember.roles.remove(rolesToRemove);
             } catch (roleError) {
               console.error("Failed to remove roles during unlink:", roleError);
             }
@@ -134,51 +141,50 @@ export async function execute(
           .addFields(
             {
               name: "EXECUTOR OF SEVERANCE",
-              value: `${executor.user.tag}`,
+              value: executor.user.tag,
               inline: true,
             },
             {
-              name: "SEVERED LINKING",
+              name: "SEVERED LINK",
               value: `Discord: ${targetUser.tag}\nFandom: ${existingLink.fandomUsername}`,
               inline: true,
             },
             {
               name: "ROLES REMOVED",
               value: targetMember
-                ? "All linked and Fandom specific roles have been stripped."
-                : "User not in server - roles could not be removed.",
+                ? "All linked and Fandom-specific roles have been stripped."
+                : "User not in server — roles could not be modified.",
               inline: false,
             },
           )
           .setTimestamp();
 
-        await interaction.followUp({ embeds: [successEmbed] });
+        await interaction.editReply({
+          embeds: [successEmbed],
+          components: [],
+        });
 
         try {
           await targetUser.send(
-            `**THY LINK HATH BEEN SEVERED!\n\nThy connection to the Fandom alter "${existingLink.fandomUsername}" has been severed by ${executor.user.tag}.\n\nTo restore thy link, thou must use the /link command again and verify thy identity anew.**`,
+            `**THY LINK HATH BEEN SEVERED!**\n\nThy connection to the Fandom alter "${existingLink.fandomUsername}" has been severed by **${executor.user.tag}**.\n\nTo restore thy link, thou must use the /link command again and verify thy identity anew.`,
           );
         } catch (dmError) {
-          console.log("Failed to send DM to unlinked user:", dmError);
+          console.log(`Could not DM ${targetUser.tag}:`, dmError);
         }
+      } else if (confirmation.customId === "cancel_severance") {
+        await confirmation.update({
+          content:
+            "**THE SEVERANCE RITUAL HATH BEEN CANCELED. THE LINK REMAINS INTACT.**",
+          embeds: [],
+          components: [],
+        });
       }
     } catch (error) {
-      const timeoutEmbed = new EmbedBuilder()
-        .setColor("#808080")
-        .setTitle("⏰ SEVERANCE RITUAL EXPIRED")
-        .setDescription(
-          "**THE SEVERANCE CONFIRMATION HAS EXPIRED. NO CHANGES WERE MADE.**",
-        )
-        .addFields({
-          name: "TO RETRY",
-          value:
-            "Run the `/removelink` command again to restart the severance process.",
-          inline: false,
-        });
-
-      await interaction.followUp({
-        embeds: [timeoutEmbed],
-        flags: MessageFlags.Ephemeral,
+      await interaction.editReply({
+        content:
+          "**⏰ THE SEVERANCE RITUAL HAS EXPIRED. NO CHANGES WERE MADE.**",
+        embeds: [],
+        components: [],
       });
     }
   } catch (error) {
