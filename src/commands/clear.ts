@@ -20,6 +20,12 @@ export const data = new SlashCommandBuilder()
       .setRequired(true)
       .setMinValue(1)
       .setMaxValue(100),
+  )
+  .addUserOption((option) =>
+    option
+      .setName("user")
+      .setDescription("The user whose messages you want to purge")
+      .setRequired(false),
   );
 
 export async function execute(
@@ -27,6 +33,7 @@ export async function execute(
   executor: GuildMember,
 ): Promise<void> {
   const amount = interaction.options.getInteger("amount")!;
+  const user = interaction.options.getUser("user");
 
   if (interaction.channel?.type !== ChannelType.GuildText) {
     await interaction.reply({
@@ -48,8 +55,27 @@ export async function execute(
   const channel = interaction.channel as TextChannel;
 
   try {
-    const messagesToDelete = await channel.messages.fetch({ limit: amount });
-    const messagesArray = Array.from(messagesToDelete.values());
+    let messagesToDelete;
+    let messagesArray;
+
+    if (user) {
+      const fetchedMessages = await channel.messages.fetch({ limit: 100 });
+      messagesToDelete = fetchedMessages
+        .filter((m) => m.author.id === user.id)
+        .first(amount);
+      messagesArray = messagesToDelete;
+    } else {
+      messagesToDelete = await channel.messages.fetch({ limit: amount });
+      messagesArray = Array.from(messagesToDelete.values());
+    }
+
+    if (messagesArray.length === 0) {
+      const content = user
+        ? "No messages found to delete for the specified user."
+        : "No messages found to delete.";
+      await interaction.reply({ content, flags: MessageFlags.Ephemeral });
+      return;
+    }
 
     const tempActionId = `C${Date.now()}`;
 
@@ -61,15 +87,17 @@ export async function execute(
       );
     }
 
-    const deleted = await channel.bulkDelete(amount, true);
+    const deleted = await channel.bulkDelete(messagesToDelete, true);
 
     await ModerationLogger.addEntry({
       type: "clear",
-      userId: "N/A",
-      userTag: "N/A",
+      userId: user ? user.id : "N/A",
+      userTag: user ? user.tag : "N/A",
       moderatorId: executor.id,
       moderatorTag: executor.user.tag,
-      reason: `Purged ${deleted.size} messages in #${channel.name}`,
+      reason: user
+        ? `Purged ${deleted.size} messages from ${user.tag} in #${channel.name}`
+        : `Purged ${deleted.size} messages in #${channel.name}`,
       guildId: interaction.guild.id,
       messageCount: deleted.size,
     });
